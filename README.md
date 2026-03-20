@@ -67,31 +67,31 @@ npx workmem init .
 Initialize in a project (interactive agent selection):
 
 ```bash
-workmem init .
+workmem init
 ```
 
 Or specify agents directly:
 
 ```bash
-workmem init . --agents claude,codex
+workmem init --agents claude,codex
 ```
 
 Check scaffold health:
 
 ```bash
-workmem doctor .
+workmem doctor
 ```
 
 Add more agents later:
 
 ```bash
-workmem add-agent . --agents opencode
+workmem add-agent --agents opencode
 ```
 
 Save a snapshot before a risky change:
 
 ```bash
-workmem snapshot . --name pre-release
+workmem snapshot --name pre-release
 ```
 
 ## What `workmem init` does
@@ -122,6 +122,21 @@ workmem snapshot . --name pre-release
 - All agents read `AGENTS.md` for shared rules
 - Each agent keeps its own entry file for tool-specific instructions
 - No conflicts, no duplication
+
+## Git management
+
+`workmem` generates a `.agent/memory/.gitignore` that separates shared and personal layers:
+
+| Layer | Path | Git | Why |
+|-------|------|-----|-----|
+| Shared | `.agent/memory/START.md` | ✅ commit | Project context for the whole team |
+| Shared | `.agent/memory/learnings/` | ✅ commit | Stable project lessons everyone benefits from |
+| Shared | `.agent/memory/procedures/` | ✅ commit | Reusable workflows and commands |
+| Shared | `AGENTS.md` | ✅ commit | Shared entry point |
+| Personal | `.agent/memory/current/` | ❌ gitignored | Individual working state and todos |
+| Personal | `.agent/memory/archive/` | ❌ gitignored | Personal snapshots |
+
+We recommend committing `.agent/memory/` to your repo so team members and their agents share the same project knowledge.
 
 ## Design principles
 
