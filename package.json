@@ -1,0 +1,37 @@
+{
+  "name": "workmem",
+  "version": "1.0.0",
+  "description": "Shared project memory scaffolding for Claude Code, Codex, Gemini, OpenCode, and other coding agents.",
+  "type": "module",
+  "bin": {
+    "workmem": "./bin/workmem.js"
+  },
+  "files": [
+    "bin",
+    "templates",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "memory",
+    "claude-code",
+    "codex",
+    "gemini",
+    "opencode",
+    "scaffold",
+    "developer-tools"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/peonai/workmem.git"
+  },
+  "bugs": {
+    "url": "https://github.com/peonai/workmem/issues"
+  },
+  "homepage": "https://github.com/peonai/workmem#readme",
+  "license": "MIT"
+}
