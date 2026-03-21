@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, cpSync } from 'fs';
-import { join, dirname, resolve } from 'path';
+import { join, dirname, resolve, basename } from 'path';
 import { fileURLToPath } from 'url';
-import { createInterface } from 'readline';
+import { Command } from 'commander';
+import { checkbox, input } from '@inquirer/prompts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -17,42 +18,7 @@ const KNOWN_AGENTS = {
 
 const WORKMEM_MARKER = '<!-- workmem -->';
 
-function help() {
-  console.log(`workmem
-
-Shared project memory scaffolding for coding agents.
-
-Usage:
-  workmem init [target-dir] [--agents claude,codex,gemini,opencode]
-  workmem add-agent [target-dir] --agents <list>
-  workmem snapshot [target-dir] [--name label]
-  workmem doctor [target-dir]
-
-All commands default to the current directory if target-dir is omitted.
-
-Examples:
-  workmem init
-  workmem init --agents claude,codex
-  workmem add-agent --agents opencode
-  workmem snapshot --name pre-release
-  workmem doctor`);
-}
-
-function parseArgs(argv) {
-  const out = { _: [] };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
-      const next = argv[i + 1];
-      if (!next || next.startsWith('-')) out[key] = true;
-      else { out[key] = next; i++; }
-    } else {
-      out._.push(arg);
-    }
-  }
-  return out;
-}
+// ── helpers ──
 
 function ensureDir(path) {
   mkdirSync(path, { recursive: true });
@@ -68,41 +34,65 @@ function writeTemplate(src, dest, vars) {
   writeFileSync(dest, render(content, vars), 'utf8');
 }
 
-function parseAgents(raw) {
-  if (!raw) return null;
-  return String(raw).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-}
-
 function projectName(target) {
   return target.split('/').filter(Boolean).pop() || 'project';
 }
 
-function ask(question) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => { rl.close(); resolve(answer.trim()); });
-  });
+function injectMarkerBlock(filePath, createTitle, injection) {
+  const dir = dirname(filePath);
+  if (dir !== '.') ensureDir(dir);
+
+  if (!existsSync(filePath)) {
+    writeFileSync(filePath, `# ${createTitle}\n${injection}`, 'utf8');
+    return 'created';
+  }
+  const content = readFileSync(filePath, 'utf8');
+  if (content.includes(WORKMEM_MARKER)) return 'exists';
+  writeFileSync(filePath, content.trimEnd() + '\n' + injection, 'utf8');
+  return 'updated';
 }
 
-async function promptAgents() {
-  const names = Object.keys(KNOWN_AGENTS);
-  console.log('Available agents:');
-  names.forEach((name, i) => {
-    console.log(`  ${i + 1}. ${KNOWN_AGENTS[name].label} (${name})`);
+// ── agent selection ──
+
+async function selectAgents() {
+  const choices = [
+    ...Object.entries(KNOWN_AGENTS).map(([key, info]) => ({
+      name: `${info.label} (${info.entryFile})`,
+      value: key,
+    })),
+    { name: 'Custom (specify your own entry file)', value: '__custom__' },
+  ];
+
+  const selected = await checkbox({
+    message: 'Select agents to set up:',
+    choices,
+    required: true,
   });
-  const answer = await ask(`Select agents (comma-separated numbers or names, default: all): `);
-  if (!answer) return names;
-  const selected = [];
-  for (const part of answer.split(',').map((s) => s.trim())) {
-    const num = parseInt(part, 10);
-    if (!isNaN(num) && num >= 1 && num <= names.length) {
-      selected.push(names[num - 1]);
-    } else if (names.includes(part.toLowerCase())) {
-      selected.push(part.toLowerCase());
+
+  const agents = [];
+  let customEntries = [];
+
+  for (const item of selected) {
+    if (item === '__custom__') {
+      const raw = await input({
+        message: 'Enter custom entry file path (e.g. .trae/memory.md):',
+        validate: (v) => v.trim() ? true : 'File path is required',
+      });
+      customEntries.push(raw.trim());
+    } else {
+      agents.push(item);
     }
   }
-  return selected.length ? [...new Set(selected)] : names;
+
+  return { agents, customEntries };
 }
+
+function parseAgentFlag(raw) {
+  if (!raw) return null;
+  return String(raw).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
+// ── scaffold ──
 
 function ensureMemoryScaffold(target, vars) {
   const base = join(target, '.agent', 'memory');
@@ -115,37 +105,20 @@ function ensureMemoryScaffold(target, vars) {
   writeTemplate(join(TEMPLATES, 'shared', 'LEARNINGS.md.tpl'), join(base, 'learnings', 'LEARNINGS.md'), vars);
   writeTemplate(join(TEMPLATES, 'shared', 'PROCEDURES.md.tpl'), join(base, 'procedures', 'PROCEDURES.md'), vars);
 
-  // gitignore for personal-layer files
   const gitignorePath = join(base, '.gitignore');
   if (!existsSync(gitignorePath)) {
     writeFileSync(gitignorePath, `# Personal working state — do not commit\ncurrent/\narchive/\n`, 'utf8');
   }
 }
 
-function injectMarkerBlock(filePath, createTitle, injection) {
-  if (!existsSync(filePath)) {
-    writeFileSync(filePath, `# ${createTitle}\n${injection}`, 'utf8');
-    return 'created';
-  }
-  const content = readFileSync(filePath, 'utf8');
-  if (content.includes(WORKMEM_MARKER)) {
-    return 'exists';
-  }
-  writeFileSync(filePath, content.trimEnd() + '\n' + injection, 'utf8');
-  return 'updated';
-}
-
-function ensureAgentsEntry(target, agents, vars) {
+function ensureAgentsEntry(target, allLabels, vars) {
   const agentsFile = join(target, 'AGENTS.md');
   const tpl = join(TEMPLATES, 'shared', 'AGENTS.md.tpl');
   const tplContent = render(readFileSync(tpl, 'utf8'), vars);
-
-  // Extract the workmem-specific block from the template
   const injection = `\n${WORKMEM_MARKER}\n${tplContent.trim()}\n`;
 
   const result = injectMarkerBlock(agentsFile, 'AGENTS', injection);
   if (result === 'created') {
-    // For new files, write the template directly (cleaner than title + injection)
     writeFileSync(agentsFile, tplContent, 'utf8');
     console.log(`  created AGENTS.md`);
   } else if (result === 'updated') {
@@ -163,28 +136,23 @@ function injectAgentEntry(target, agentName) {
   const injection = `\n${WORKMEM_MARKER}\n## Project Memory (workmem)\n\nThis project uses a shared working memory layer. Read \`AGENTS.md\` before starting work.\n`;
 
   const result = injectMarkerBlock(entryPath, info.label, injection);
-  if (result === 'created') {
-    console.log(`  created ${info.entryFile}`);
-  } else if (result === 'updated') {
-    console.log(`  updated ${info.entryFile}`);
-  } else {
-    console.log(`  ${info.entryFile} already has workmem reference`);
-  }
+  if (result === 'created') console.log(`  created ${info.entryFile}`);
+  else if (result === 'updated') console.log(`  updated ${info.entryFile}`);
+  else console.log(`  ${info.entryFile} already has workmem reference`);
 }
 
-async function init(targetDir, agentsList) {
-  const target = resolve(targetDir);
-  const agents = agentsList || await promptAgents();
-  const vars = { PROJECT_NAME: projectName(target), AGENT_LIST: agents.join(', ') };
+function injectCustomEntry(target, entryFile) {
+  const entryPath = join(target, entryFile);
+  const label = basename(entryFile, '.md');
+  const injection = `\n${WORKMEM_MARKER}\n## Project Memory (workmem)\n\nThis project uses a shared working memory layer. Read \`AGENTS.md\` before starting work.\n`;
 
-  ensureMemoryScaffold(target, vars);
-  ensureAgentsEntry(target, agents, vars);
-  for (const agent of agents) {
-    injectAgentEntry(target, agent);
-  }
+  const result = injectMarkerBlock(entryPath, label, injection);
+  if (result === 'created') console.log(`  created ${entryFile}`);
+  else if (result === 'updated') console.log(`  updated ${entryFile}`);
+  else console.log(`  ${entryFile} already has workmem reference`);
+}
 
-  console.log(`\nInitialized workmem in ${join(target, '.agent', 'memory')}`);
-  console.log(`Agents: ${agents.join(', ')}`);
+function printSummary(target) {
   console.log(`\nShared files (commit to git):`);
   console.log(`  .agent/memory/START.md`);
   console.log(`  .agent/memory/learnings/`);
@@ -195,96 +163,141 @@ async function init(targetDir, agentsList) {
   console.log(`  .agent/memory/archive/`);
 }
 
-function addAgent(targetDir, agents) {
-  const target = resolve(targetDir);
-  for (const agent of agents) {
-    injectAgentEntry(target, agent);
-  }
-  console.log(`Added agents: ${agents.join(', ')}`);
-}
+// ── commands ──
 
-function snapshot(targetDir, label) {
-  const target = resolve(targetDir);
-  const base = join(target, '.agent', 'memory');
-  const archive = join(base, 'archive');
-  ensureDir(archive);
-  const name = label || new Date().toISOString().replace(/[:.]/g, '-');
-  const snapDir = join(archive, name);
-  ensureDir(snapDir);
-  for (const rel of ['START.md', 'current', 'learnings', 'procedures']) {
-    const src = join(base, rel);
-    if (existsSync(src)) cpSync(src, join(snapDir, rel), { recursive: true });
-  }
-  console.log(`Snapshot saved: ${snapDir}`);
-}
+const program = new Command();
 
-function doctor(targetDir) {
-  const target = resolve(targetDir);
-  const base = join(target, '.agent', 'memory');
-  const required = [
-    'START.md',
-    'current/CURRENT.md',
-    'current/TODOS.md',
-    'learnings/LEARNINGS.md',
-    'procedures/PROCEDURES.md'
-  ];
-  let ok = true;
-  for (const rel of required) {
-    const full = join(base, rel);
-    if (!existsSync(full)) {
-      ok = false;
-      console.log(`  missing: .agent/memory/${rel}`);
+program
+  .name('workmem')
+  .description('Shared project memory scaffolding for coding agents.')
+  .version('1.0.0');
+
+program
+  .command('init')
+  .description('Initialize workmem scaffold in a project')
+  .argument('[target-dir]', 'target directory', '.')
+  .option('--agents <list>', 'comma-separated agent names')
+  .option('--custom <path>', 'custom entry file path (e.g. .trae/memory.md)')
+  .action(async (targetDir, opts) => {
+    const target = resolve(targetDir);
+    let agents = [], customEntries = [];
+
+    if (opts.custom) {
+      customEntries.push(opts.custom.trim());
     }
-  }
-  // Check AGENTS.md
-  const agentsFile = join(target, 'AGENTS.md');
-  if (!existsSync(agentsFile)) {
-    ok = false;
-    console.log(`  missing: AGENTS.md`);
-  } else if (!readFileSync(agentsFile, 'utf8').includes(WORKMEM_MARKER)) {
-    console.log(`  AGENTS.md exists but has no workmem reference`);
-  }
-  // Check agent entry files
-  for (const [name, info] of Object.entries(KNOWN_AGENTS)) {
-    const entryPath = join(target, info.entryFile);
-    if (existsSync(entryPath)) {
-      const content = readFileSync(entryPath, 'utf8');
-      if (content.includes(WORKMEM_MARKER)) {
-        console.log(`  ${info.entryFile}: workmem linked`);
-      } else {
-        console.log(`  ${info.entryFile}: exists but no workmem reference`);
+
+    if (opts.agents) {
+      agents = parseAgentFlag(opts.agents);
+    } else if (!opts.custom) {
+      const result = await selectAgents();
+      agents = result.agents;
+      customEntries.push(...result.customEntries);
+    }
+
+    const allLabels = [
+      ...agents.map((a) => KNOWN_AGENTS[a]?.label || a),
+      ...customEntries.map((e) => basename(e, '.md')),
+    ];
+    const vars = { PROJECT_NAME: projectName(target), AGENT_LIST: allLabels.join(', ') };
+
+    ensureMemoryScaffold(target, vars);
+    ensureAgentsEntry(target, allLabels, vars);
+    for (const agent of agents) injectAgentEntry(target, agent);
+    for (const entry of customEntries) injectCustomEntry(target, entry);
+
+    console.log(`\nInitialized workmem in ${join(target, '.agent', 'memory')}`);
+    console.log(`Agents: ${allLabels.join(', ')}`);
+    printSummary(target);
+  });
+
+program
+  .command('add-agent')
+  .description('Add agent entry files to an existing scaffold')
+  .argument('[target-dir]', 'target directory', '.')
+  .option('--agents <list>', 'comma-separated agent names')
+  .option('--custom <path>', 'custom entry file path (e.g. .trae/memory.md)')
+  .action(async (targetDir, opts) => {
+    const target = resolve(targetDir);
+    let agents = [], customEntries = [];
+
+    if (opts.custom) {
+      customEntries.push(opts.custom.trim());
+    }
+
+    if (opts.agents) {
+      agents = parseAgentFlag(opts.agents);
+    } else if (!opts.custom) {
+      const result = await selectAgents();
+      agents = result.agents;
+      customEntries.push(...result.customEntries);
+    }
+
+    for (const agent of agents) injectAgentEntry(target, agent);
+    for (const entry of customEntries) injectCustomEntry(target, entry);
+
+    const labels = [
+      ...agents.map((a) => KNOWN_AGENTS[a]?.label || a),
+      ...customEntries.map((e) => basename(e, '.md')),
+    ];
+    console.log(`Added agents: ${labels.join(', ')}`);
+  });
+
+program
+  .command('snapshot')
+  .description('Archive current memory state')
+  .argument('[target-dir]', 'target directory', '.')
+  .option('--name <label>', 'snapshot label')
+  .action((targetDir, opts) => {
+    const target = resolve(targetDir);
+    const base = join(target, '.agent', 'memory');
+    const archive = join(base, 'archive');
+    ensureDir(archive);
+    const name = opts.name || new Date().toISOString().replace(/[:.]/g, '-');
+    const snapDir = join(archive, name);
+    ensureDir(snapDir);
+    for (const rel of ['START.md', 'current', 'learnings', 'procedures']) {
+      const src = join(base, rel);
+      if (existsSync(src)) cpSync(src, join(snapDir, rel), { recursive: true });
+    }
+    console.log(`Snapshot saved: ${snapDir}`);
+  });
+
+program
+  .command('doctor')
+  .description('Check scaffold health')
+  .argument('[target-dir]', 'target directory', '.')
+  .action((targetDir) => {
+    const target = resolve(targetDir);
+    const base = join(target, '.agent', 'memory');
+    const required = [
+      'START.md',
+      'current/CURRENT.md',
+      'current/TODOS.md',
+      'learnings/LEARNINGS.md',
+      'procedures/PROCEDURES.md',
+    ];
+    let ok = true;
+    for (const rel of required) {
+      const full = join(base, rel);
+      if (!existsSync(full)) {
+        ok = false;
+        console.log(`  missing: .agent/memory/${rel}`);
       }
     }
-  }
-  // Check gitignore
-  const gi = join(base, '.gitignore');
-  if (!existsSync(gi)) {
-    console.log(`  warning: .agent/memory/.gitignore missing`);
-  }
-  console.log(ok ? 'doctor: OK' : 'doctor: issues found');
-  process.exitCode = ok ? 0 : 1;
-}
+    // Check agent entry files
+    for (const [name, info] of Object.entries(KNOWN_AGENTS)) {
+      const entryPath = join(target, info.entryFile);
+      if (existsSync(entryPath)) {
+        const content = readFileSync(entryPath, 'utf8');
+        if (content.includes(WORKMEM_MARKER)) {
+          console.log(`  ${info.entryFile}: workmem linked`);
+        } else {
+          console.log(`  ${info.entryFile}: exists but no workmem reference`);
+        }
+      }
+    }
+    console.log(ok ? 'doctor: OK' : 'doctor: issues found');
+    process.exitCode = ok ? 0 : 1;
+  });
 
-const args = parseArgs(process.argv.slice(2));
-const command = args._[0];
-const targetDir = args._[1] || '.';
-
-if (!command || command === 'help' || command === '--help' || command === '-h') {
-  help();
-} else if (command === 'init') {
-  init(targetDir, parseAgents(args.agents));
-} else if (command === 'add-agent') {
-  const agents = parseAgents(args.agents);
-  if (!agents || !agents.length) {
-    console.error('Usage: workmem add-agent [target-dir] --agents <list>');
-    process.exit(1);
-  }
-  addAgent(targetDir, agents);
-} else if (command === 'snapshot') {
-  snapshot(targetDir, args.name);
-} else if (command === 'doctor') {
-  doctor(targetDir);
-} else {
-  help();
-  process.exit(1);
-}
+program.parse();
