@@ -1,6 +1,6 @@
 {
   "name": "workmem",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Shared project memory scaffolding for Claude Code, Codex, Gemini, OpenCode, and other coding agents.",
   "type": "module",
   "bin": {
