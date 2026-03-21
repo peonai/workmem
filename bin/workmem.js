@@ -48,6 +48,12 @@ function injectMarkerBlock(filePath, createTitle, injection) {
   }
   const content = readFileSync(filePath, 'utf8');
   if (content.includes(WORKMEM_MARKER)) return 'exists';
+  // Detect existing workmem content (e.g. from a previous init without marker)
+  if (content.includes('.agent/memory/') && content.includes('workmem')) {
+    console.log(`  ⚠ ${filePath} already has workmem references but no marker.`);
+    console.log(`    Skipping to avoid duplicates. Add "${WORKMEM_MARKER}" manually if you want to re-inject.`);
+    return 'exists';
+  }
   writeFileSync(filePath, content.trimEnd() + '\n' + injection, 'utf8');
   return 'updated';
 }

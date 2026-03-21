@@ -3,11 +3,8 @@
 Project: {{PROJECT_NAME}}
 Supported agents: {{AGENT_LIST}}
 
-Read order before work:
-1. `AGENTS.md`
-2. `.agent/memory/current/CURRENT.md`
-3. `.agent/memory/current/TODOS.md`
-4. `.agent/memory/learnings/LEARNINGS.md` (recent entries first)
+This file is static project context. Agents read it on first encounter.
+For current state, see `current/CURRENT.md`.
 
 Rules:
 - Keep notes short and operational
