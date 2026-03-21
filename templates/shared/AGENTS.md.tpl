@@ -1,30 +1,33 @@
 # AGENTS.md
 
-⚠️ **This project uses [workmem](https://github.com/peonai/workmem). Follow the rules below — they are not optional.**
+⚠️ **This project uses [workmem](https://github.com/peonai/workmem) for project memory. Follow the rules below BEFORE doing anything else.**
 
-## Session start — read first
+## Every session — mandatory read order
 
-1. `.agent/memory/WORKMEM.md` — current state, todos, learnings, procedures (all in one file)
+1. `.agent/memory/current/CURRENT.md` — what's happening now
+2. `.agent/memory/current/TODOS.md` — pending tasks
+3. `.agent/memory/learnings/LEARNINGS.md` — recent entries first
 
-Only read `.agent/memory/START.md` on first encounter with this project (static context).
+Only read `.agent/memory/START.md` on first encounter with this project (it has static context).
 
 Do NOT skip this. Do NOT rely on auto-memory or system-level memory instead.
 
-## Session end — mandatory checklist
+## When to update workmem
 
-Before ending your session, review `.agent/memory/WORKMEM.md` and update if any of these apply:
-
-- [ ] **Current State** changed (finished a feature, shifted focus)
-- [ ] **TODOs** changed (new tasks, completed tasks)
-- [ ] **Learnings** to add (hit a non-obvious bug, discovered a gotcha)
-- [ ] **Procedures** to add (found a repeatable workflow)
-
-If nothing changed, you don't need to update. But you must check.
+| Trigger | Action |
+|---------|--------|
+| Finished a feature/fix | Update `CURRENT.md` (active focus) |
+| Left something unfinished | Add to `TODOS.md` with priority |
+| Hit a non-obvious bug/gotcha | Append to `LEARNINGS.md` |
+| Discovered a repeatable workflow | Append to `PROCEDURES.md` |
+| Session ending | Review all 4 files, update if stale |
 
 ## workmem vs auto-memory
 
-- **workmem** (`.agent/memory/`): project-scoped, shared across agents, version-controlled. Source of truth for project state.
-- **auto-memory** (system-level): agent-scoped, not shared, not in git. Only for personal preferences — never for project knowledge.
+- **workmem** (`.agent/memory/`): project-scoped, shared across agents, version-controlled with the repo. This is the source of truth for project state.
+- **auto-memory** (system-level): agent-scoped, not shared, not in git. Useful for personal preferences, not for project knowledge.
+
+If something matters to the project, it goes in workmem. Period.
 
 ## Rules
 
@@ -33,6 +36,7 @@ If nothing changed, you don't need to update. But you must check.
 - Do not create random files outside `.agent/memory/`
 - Archive old material into `.agent/memory/archive/` instead of deleting
 - **Never use system-level auto-memory as a substitute for workmem**
+- **Always read workmem files before starting work, even if you think you remember the context**
 
 ## Supported agents
 
