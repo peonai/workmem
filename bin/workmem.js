@@ -102,18 +102,13 @@ function parseAgentFlag(raw) {
 
 function ensureMemoryScaffold(target, vars) {
   const base = join(target, '.agent', 'memory');
-  for (const dir of ['current', 'learnings', 'procedures', 'archive']) {
-    ensureDir(join(base, dir));
-  }
+  ensureDir(join(base, 'archive'));
   writeTemplate(join(TEMPLATES, 'shared', 'START.md.tpl'), join(base, 'START.md'), vars);
-  writeTemplate(join(TEMPLATES, 'shared', 'CURRENT.md.tpl'), join(base, 'current', 'CURRENT.md'), vars);
-  writeTemplate(join(TEMPLATES, 'shared', 'TODOS.md.tpl'), join(base, 'current', 'TODOS.md'), vars);
-  writeTemplate(join(TEMPLATES, 'shared', 'LEARNINGS.md.tpl'), join(base, 'learnings', 'LEARNINGS.md'), vars);
-  writeTemplate(join(TEMPLATES, 'shared', 'PROCEDURES.md.tpl'), join(base, 'procedures', 'PROCEDURES.md'), vars);
+  writeTemplate(join(TEMPLATES, 'shared', 'WORKMEM.md.tpl'), join(base, 'WORKMEM.md'), vars);
 
   const gitignorePath = join(base, '.gitignore');
   if (!existsSync(gitignorePath)) {
-    writeFileSync(gitignorePath, `# Personal working state — do not commit\ncurrent/\narchive/\n`, 'utf8');
+    writeFileSync(gitignorePath, `archive/\n`, 'utf8');
   }
 }
 
@@ -159,13 +154,11 @@ function injectCustomEntry(target, entryFile) {
 }
 
 function printSummary(target) {
-  console.log(`\nShared files (commit to git):`);
+  console.log(`\nCommit to git:`);
   console.log(`  .agent/memory/START.md`);
-  console.log(`  .agent/memory/learnings/`);
-  console.log(`  .agent/memory/procedures/`);
+  console.log(`  .agent/memory/WORKMEM.md`);
   console.log(`  AGENTS.md`);
-  console.log(`\nPersonal files (gitignored):`);
-  console.log(`  .agent/memory/current/`);
+  console.log(`\nGitignored:`);
   console.log(`  .agent/memory/archive/`);
 }
 
@@ -176,7 +169,7 @@ const program = new Command();
 program
   .name('workmem')
   .description('Shared project memory scaffolding for coding agents.')
-  .version('1.0.0');
+  .version('2.0.0');
 
 program
   .command('init')
@@ -261,7 +254,7 @@ program
     const name = opts.name || new Date().toISOString().replace(/[:.]/g, '-');
     const snapDir = join(archive, name);
     ensureDir(snapDir);
-    for (const rel of ['START.md', 'current', 'learnings', 'procedures']) {
+    for (const rel of ['START.md', 'WORKMEM.md']) {
       const src = join(base, rel);
       if (existsSync(src)) cpSync(src, join(snapDir, rel), { recursive: true });
     }
@@ -275,14 +268,12 @@ program
   .action((targetDir) => {
     const target = resolve(targetDir);
     const base = join(target, '.agent', 'memory');
-    const required = [
-      'START.md',
-      'current/CURRENT.md',
-      'current/TODOS.md',
-      'learnings/LEARNINGS.md',
-      'procedures/PROCEDURES.md',
-    ];
+    const required = ['START.md', 'WORKMEM.md'];
+    // Also check legacy structure
+    const legacy = ['current/CURRENT.md', 'current/TODOS.md', 'learnings/LEARNINGS.md', 'procedures/PROCEDURES.md'];
     let ok = true;
+    let hasLegacy = false;
+
     for (const rel of required) {
       const full = join(base, rel);
       if (!existsSync(full)) {
@@ -290,6 +281,14 @@ program
         console.log(`  missing: .agent/memory/${rel}`);
       }
     }
+
+    for (const rel of legacy) {
+      if (existsSync(join(base, rel))) hasLegacy = true;
+    }
+    if (hasLegacy) {
+      console.log(`  ⚠ Legacy v1 files detected (current/, learnings/, procedures/). Consider migrating to single WORKMEM.md.`);
+    }
+
     // Check agent entry files
     for (const [name, info] of Object.entries(KNOWN_AGENTS)) {
       const entryPath = join(target, info.entryFile);
