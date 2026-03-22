@@ -1,54 +1,117 @@
 # workmem
 
-Shared project memory scaffolding for Claude Code, Codex, Gemini, OpenCode, and other coding agents.
+Claude Code-first project memory scaffolding with a plugin-backed integration layer.
 
-`workmem` gives your projects a lightweight, file-based working memory layer so coding agents stop restarting from zero every session.
+`workmem` is no longer a handful of fixed markdown files glued onto `CLAUDE.md`.
+The new direction is closer to a real agent memory system:
+- a compact index
+- semantic memory
+- procedural memory
+- episodic notes
+- snapshots and legacy buckets
+- Claude Code hooks + skill as the execution layer
 
-## Why it exists
+The goal is simple: make Claude Code improve with use instead of re-learning the same repo over and over.
 
-Coding agents are great at execution, but terrible at continuity. Without a durable place to keep project state, lessons, and pending tasks, every new session starts from scratch.
+## Why this redesign
 
-`workmem` standardizes that layer across tools without locking you into one AI vendor.
+A plain `CLAUDE.md` is just context. It helps, but it does not guarantee Claude will proactively maintain project memory.
+
+Claude Code plugins can bundle:
+- hooks
+- skills
+- agents
+- MCP servers
+
+So `workmem` now uses the Claude extension model properly:
+- **repo-local memory files** as source of truth
+- **Claude Code plugin hooks** to inject memory context deterministically
+- **Claude skill** to maintain and evolve memory structure over time
 
 ## What it creates
 
 ```text
 your-project/
-├── AGENTS.md                  # shared entry point for all agents
-├── CLAUDE.md                  # Claude Code entry (created or updated)
-├── CODEX.md                   # Codex entry (created or updated)
-├── GEMINI.md                  # Gemini entry (created or updated)
-├── OPENCODE.md                # OpenCode entry (created or updated)
-└── .agent/
-    └── memory/
-        ├── START.md
-        ├── current/
-        │   ├── CURRENT.md
-        │   └── TODOS.md
-        ├── learnings/
-        │   └── LEARNINGS.md
-        ├── procedures/
-        │   └── PROCEDURES.md
-        └── archive/
+├── .agent/
+│   └── memory/
+│       ├── MEMORY.md
+│       ├── .gitignore
+│       ├── episodic/
+│       │   └── YYYY-MM-DD.md
+│       ├── semantic/
+│       │   ├── active-context.md
+│       │   ├── decisions.md
+│       │   └── project.md
+│       ├── procedural/
+│       │   └── common-workflows.md
+│       ├── snapshots/
+│       └── legacy/
+└── .claude/
+    ├── CLAUDE.md
+    └── plugins/
+        └── workmem/
+            ├── .claude-plugin/
+            │   └── plugin.json
+            ├── hooks/
+            │   └── hooks.json
+            ├── skills/
+            │   └── maintain-workmem/
+            │       └── SKILL.md
+            └── scripts/
+                ├── session-start.js
+                └── user-prompt-submit.js
 ```
+
+## Memory model
+
+### `MEMORY.md`
+The routing layer.
+Keep it short. It points Claude to the right topic files and explains how the memory tree is organized.
+
+### `semantic/*.md`
+Durable knowledge:
+- project facts
+- architecture notes
+- constraints
+- decisions
+- conventions
+
+### `procedural/*.md`
+Reusable workflows:
+- build/test/release commands
+- migration flows
+- debugging playbooks
+- recurring maintenance steps
+
+### `episodic/YYYY-MM-DD.md`
+What happened today:
+- progress notes
+- temporary findings
+- debugging trail
+- loose observations before promotion
+
+### `snapshots/`
+Backups before cleanup, compaction, or risky memory refactors.
+
+### `legacy/`
+Retired or superseded files.
 
 ## How it works
 
-1. `workmem init` asks which agents you use
-2. Creates `.agent/memory/` with shared templates
-3. Creates `AGENTS.md` as the shared memory entry point
-4. For each selected agent, creates or updates its native entry file (`CLAUDE.md`, `GEMINI.md`, etc.) to reference `AGENTS.md`
+### Core memory layer
+The repo keeps its memory in `.agent/memory/`.
+Claude should not try to stuff everything into one file. `MEMORY.md` stays compact while topic files expand as needed.
 
-This means agents actually read the memory layer through their normal startup path. No extra configuration needed.
+### Claude Code adapter
+The local plugin currently does more than just nudge Claude:
+1. **SessionStart hook** injects a compact reminder + previews of `MEMORY.md`, active context, and the latest episodic note
+2. **UserPromptSubmit hook** adds targeted reminders for continuation, wrap-up, and memory-heavy prompts
+3. **TaskCompleted / Stop / SessionEnd hooks** create a deterministic memory-review checkpoint so Claude gets pushed to reconcile project memory before declaring work done
+4. **maintain-workmem skill** teaches Claude how to route knowledge into semantic / procedural / episodic memory and keep the index clean
+5. **local memory helper scripts** provide stable read / write / promote / reindex / review / sync / topic-create / archive / compact entry points that Claude can use through Bash
+6. **local MCP server** exposes the same operations as first-class tools, so Claude can call workmem without shell glue
 
-## Supported agents
-
-| Agent | Entry file |
-|-------|-----------|
-| Claude Code | `CLAUDE.md` |
-| Codex | `CODEX.md` |
-| Gemini | `GEMINI.md` |
-| OpenCode | `OPENCODE.md` |
+This is much closer to a self-evolving project memory loop inside Claude Code.
 
 ## Install
 
@@ -64,16 +127,16 @@ npx workmem init .
 
 ## Quick start
 
-Initialize in a project (interactive agent selection):
+Initialize in a project:
 
 ```bash
 workmem init
 ```
 
-Or specify agents directly:
+Then run Claude Code with the local plugin scaffolded by `workmem`:
 
 ```bash
-workmem init --agents claude,codex
+claude --plugin-dir ./.claude/plugins/workmem
 ```
 
 Check scaffold health:
@@ -82,120 +145,100 @@ Check scaffold health:
 workmem doctor
 ```
 
-Add more agents later:
-
-```bash
-workmem add-agent --agents opencode
-```
-
 Save a snapshot before a risky change:
 
 ```bash
-workmem snapshot --name pre-release
+workmem snapshot --name pre-refactor
 ```
-
-## What `workmem init` does
-
-1. Creates `.agent/memory/` directory structure with starter templates
-2. Creates `AGENTS.md` with shared memory rules and read order
-3. For each selected agent:
-   - If the entry file (e.g. `CLAUDE.md`) does not exist, creates it with a workmem reference
-   - If it already exists, appends a workmem reference (idempotent, won't duplicate)
-4. Does not modify any source code, configs, or git settings
-5. Does not install dependencies or contact external services
-
-## Recommended workflow
-
-1. Run `workmem init` once per project
-2. Start your coding agent — it reads its entry file, which points to `AGENTS.md`
-3. Keep `.agent/memory/current/CURRENT.md` updated when project state changes
-4. Keep unfinished work in `.agent/memory/current/TODOS.md`
-5. Write stable lessons into `.agent/memory/learnings/LEARNINGS.md`
-6. Write reusable commands and flows into `.agent/memory/procedures/PROCEDURES.md`
-7. Snapshot before large refactors, migrations, or releases
-
-## Multi-agent projects
-
-`workmem` is designed for projects where multiple agents work on the same codebase.
-
-- All agents share one `.agent/memory/` directory
-- All agents read `AGENTS.md` for shared rules
-- Each agent keeps its own entry file for tool-specific instructions
-- No conflicts, no duplication
-
-## Git management
-
-`workmem` generates a `.agent/memory/.gitignore` that separates shared and personal layers:
-
-| Layer | Path | Git | Why |
-|-------|------|-----|-----|
-| Shared | `.agent/memory/START.md` | ✅ commit | Project context for the whole team |
-| Shared | `.agent/memory/learnings/` | ✅ commit | Stable project lessons everyone benefits from |
-| Shared | `.agent/memory/procedures/` | ✅ commit | Reusable workflows and commands |
-| Shared | `AGENTS.md` | ✅ commit | Shared entry point |
-| Personal | `.agent/memory/current/` | ❌ gitignored | Individual working state and todos |
-| Personal | `.agent/memory/archive/` | ❌ gitignored | Personal snapshots |
-
-We recommend committing `.agent/memory/` to your repo so team members and their agents share the same project knowledge.
-
-## Design principles
-
-- Markdown only, no hidden databases
-- No external services or network calls
-- Shared memory layer with per-agent entry points
-- Optimized for session continuity, not semantic search
-- `.agent/` as an extensible namespace for agent tooling
-- Idempotent — safe to run multiple times
-
-## What this is not
-
-- Not a vector database
-- Not a semantic search engine
-- Not a chat transcript archive
-- Not a replacement for project documentation
-
-It is a practical working memory scaffold for day-to-day coding sessions.
 
 ## Command reference
 
 ### `workmem init`
 
-Create the scaffold and wire up agent entry files.
+Create the memory scaffold plus Claude Code plugin integration.
 
 ```bash
-workmem init [target-dir] [--agents claude,codex,gemini,opencode]
+workmem init [target-dir] [--backend claude] [--plugin-dir .claude/plugins/workmem] [--claude-md .claude/CLAUDE.md]
 ```
 
-### `workmem add-agent`
+### `workmem doctor`
 
-Add new agent entry files without re-initializing.
+Check whether the memory scaffold and Claude plugin files are present.
 
 ```bash
-workmem add-agent [target-dir] --agents <list>
+workmem doctor [target-dir] [--backend claude]
 ```
 
 ### `workmem snapshot`
 
-Archive the current memory state.
+Archive the current memory state into `snapshots/`.
 
 ```bash
 workmem snapshot [target-dir] [--name label]
 ```
 
-### `workmem doctor`
+## Design principles
 
-Check whether the scaffold and core files are present.
+- markdown-only memory, easy to audit
+- repo-local source of truth
+- keep the index short, grow by topic files
+- promote knowledge from episodic -> semantic / procedural
+- Claude Code plugin as deterministic execution layer
+- future backends should be adapters, not a rewrite of the memory tree
+
+## Current scope
+
+Right now `workmem` is intentionally focused on **Claude Code**.
+
+Support for Codex, Gemini, OpenCode, and other agents is paused while the Claude backend is hardened.
+The memory tree is kept generic on purpose so other adapters can be added back later without redoing project data.
+
+## Local helper scripts
+
+The Claude plugin now ships deterministic memory helpers:
 
 ```bash
-workmem doctor [target-dir]
+node .claude/plugins/workmem/scripts/memory/read.js --help
+node .claude/plugins/workmem/scripts/memory/write.js --help
+node .claude/plugins/workmem/scripts/memory/promote.js --help
+node .claude/plugins/workmem/scripts/memory/reindex.js --help
+node .claude/plugins/workmem/scripts/memory/review.js --help
+node .claude/plugins/workmem/scripts/memory/sync.js --help
+node .claude/plugins/workmem/scripts/memory/topic-create.js --help
+node .claude/plugins/workmem/scripts/memory/archive.js --help
+node .claude/plugins/workmem/scripts/memory/compact.js --help
 ```
+
+They are intentionally simple:
+- `read.js` reads the index, latest episodic note, or a topic file
+- `write.js` appends or replaces content in a routed memory file
+- `promote.js` moves durable notes from episodic flow into semantic/procedural topics
+- `reindex.js` refreshes `MEMORY.md` from the current topic tree
+- `review.js` extracts candidate promotions from the latest episodic note
+- `sync.js` does a heuristic pass to push follow-ups / decisions / workflows into the right buckets
+- `topic-create.js` creates a new topic file when a subject outgrows the existing pages
+- `archive.js` moves stale topics into `legacy/`
+- `compact.js` trims noisy active files so the memory set stays usable
+- `topic-create.js` creates a new topic file when a subject outgrows the existing pages
+- `archive.js` moves stale topics into `legacy/`
+- `compact.js` trims noisy active files so the memory set stays usable
 
 ## Roadmap
 
-- Richer `doctor` diagnostics
-- Stack-aware starter templates
-- Import helpers for existing project notes
-- `workmem clean` for archiving stale entries
+- richer promotion heuristics from episodic -> semantic / procedural
+- stronger MCP-backed memory operations on top of the local scripts
+- richer doctor diagnostics
+- marketplace-ready plugin packaging
+- more adapters after the Claude backend is stable
+
+## License
+
+MIT
+on heuristics from episodic -> semantic / procedural
+- stronger MCP-backed memory operations on top of the local scripts
+- richer doctor diagnostics
+- marketplace-ready plugin packaging
+- more adapters after the Claude backend is stable
 
 ## License
 

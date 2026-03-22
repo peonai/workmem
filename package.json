@@ -1,7 +1,7 @@
 {
   "name": "workmem",
-  "version": "1.0.2",
-  "description": "Shared project memory scaffolding for Claude Code, Codex, Gemini, OpenCode, and other coding agents.",
+  "version": "2.6.0",
+  "description": "Claude Code-first project memory scaffolding with lifecycle hooks and MCP-first project memory operations.",
   "type": "module",
   "bin": {
     "workmem": "./bin/workmem.js"
@@ -19,10 +19,9 @@
     "agent",
     "memory",
     "claude-code",
-    "codex",
-    "gemini",
-    "opencode",
-    "scaffold",
+    "plugin",
+    "hooks",
+    "semantic-memory",
     "developer-tools"
   ],
   "repository": {
@@ -35,7 +34,6 @@
   "homepage": "https://github.com/peonai/workmem#readme",
   "license": "MIT",
   "dependencies": {
-    "@inquirer/prompts": "^8.3.2",
     "commander": "^14.0.3"
   }
 }

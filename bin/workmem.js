@@ -1,307 +1,313 @@
 #!/usr/bin/env node
-import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, cpSync } from 'fs';
-import { join, dirname, resolve, basename } from 'path';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, cpSync, readdirSync, statSync } from 'fs';
+import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { Command } from 'commander';
-import { checkbox, input } from '@inquirer/prompts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 const TEMPLATES = join(ROOT, 'templates');
+const PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 
-const KNOWN_AGENTS = {
-  claude:   { entryFile: 'CLAUDE.md',   label: 'Claude Code' },
-  codex:    { entryFile: 'CODEX.md',    label: 'Codex' },
-  gemini:   { entryFile: 'GEMINI.md',   label: 'Gemini' },
-  opencode: { entryFile: 'OPENCODE.md', label: 'OpenCode' },
+const SUPPORTED_BACKENDS = {
+  claude: {
+    label: 'Claude Code',
+    pluginDir: '.claude/plugins/workmem',
+    claudeMd: '.claude/CLAUDE.md',
+  },
 };
 
-const WORKMEM_MARKER = '<!-- workmem -->';
-
-// ── helpers ──
+const WORKMEM_MARKER = '<!-- workmem-managed -->';
 
 function ensureDir(path) {
   mkdirSync(path, { recursive: true });
 }
 
 function render(text, vars) {
-  return text.replace(/\{\{\s*([A-Z_]+)\s*\}\}/g, (_, key) => vars[key] || '');
+  return text.replace(/\{\{\s*([A-Z_]+)\s*\}\}/g, (_, key) => vars[key] ?? '');
 }
 
-function writeTemplate(src, dest, vars) {
-  if (existsSync(dest)) return;
-  const content = readFileSync(src, 'utf8');
-  writeFileSync(dest, render(content, vars), 'utf8');
+function readTemplate(relPath) {
+  return readFileSync(join(TEMPLATES, relPath), 'utf8');
+}
+
+function writeTemplateIfMissing(srcRelPath, destPath, vars) {
+  if (existsSync(destPath)) return false;
+  ensureDir(dirname(destPath));
+  writeFileSync(destPath, render(readTemplate(srcRelPath), vars), 'utf8');
+  return true;
+}
+
+function writeManagedFile(srcRelPath, destPath, vars) {
+  ensureDir(dirname(destPath));
+  writeFileSync(destPath, render(readTemplate(srcRelPath), vars), 'utf8');
 }
 
 function projectName(target) {
   return target.split('/').filter(Boolean).pop() || 'project';
 }
 
-function injectMarkerBlock(filePath, createTitle, injection) {
-  const dir = dirname(filePath);
-  if (dir !== '.') ensureDir(dir);
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function injectManagedBlock(filePath, createTitle, body) {
+  const block = `\n${WORKMEM_MARKER}\n${body.trim()}\n`;
+  ensureDir(dirname(filePath));
 
   if (!existsSync(filePath)) {
-    writeFileSync(filePath, `# ${createTitle}\n${injection}`, 'utf8');
+    writeFileSync(filePath, `# ${createTitle}\n${block}`, 'utf8');
     return 'created';
   }
+
   const content = readFileSync(filePath, 'utf8');
-  if (content.includes(WORKMEM_MARKER)) return 'exists';
-  // Detect existing workmem content (e.g. from a previous init without marker)
-  if (content.includes('.agent/memory/') && content.includes('workmem')) {
-    console.log(`  ⚠ ${filePath} already has workmem references but no marker.`);
-    console.log(`    Skipping to avoid duplicates. Add "${WORKMEM_MARKER}" manually if you want to re-inject.`);
-    return 'exists';
+  if (content.includes(WORKMEM_MARKER)) {
+    const updated = content.replace(
+      new RegExp(`${WORKMEM_MARKER}[\\s\\S]*$`),
+      `${WORKMEM_MARKER}\n${body.trim()}\n`
+    );
+    writeFileSync(filePath, updated, 'utf8');
+    return 'updated';
   }
-  writeFileSync(filePath, content.trimEnd() + '\n' + injection, 'utf8');
+
+  writeFileSync(filePath, `${content.trimEnd()}\n${block}`, 'utf8');
   return 'updated';
 }
 
-// ── agent selection ──
+function latestEpisodicFile(base) {
+  const episodicDir = join(base, 'episodic');
+  if (!existsSync(episodicDir)) return null;
 
-async function selectAgents() {
-  const choices = [
-    ...Object.entries(KNOWN_AGENTS).map(([key, info]) => ({
-      name: `${info.label} (${info.entryFile})`,
-      value: key,
-    })),
-    { name: 'Custom (specify your own entry file)', value: '__custom__' },
+  const files = readdirSync(episodicDir)
+    .filter((name) => name.endsWith('.md'))
+    .sort();
+
+  return files.length ? join(episodicDir, files[files.length - 1]) : null;
+}
+
+function ensureCoreMemoryScaffold(target, vars) {
+  const base = join(target, '.agent', 'memory');
+  for (const dir of ['episodic', 'semantic', 'procedural', 'snapshots', 'legacy']) {
+    ensureDir(join(base, dir));
+  }
+
+  writeTemplateIfMissing('core/MEMORY.md.tpl', join(base, 'MEMORY.md'), vars);
+  writeTemplateIfMissing('core/semantic/project.md.tpl', join(base, 'semantic', 'project.md'), vars);
+  writeTemplateIfMissing('core/semantic/active-context.md.tpl', join(base, 'semantic', 'active-context.md'), vars);
+  writeTemplateIfMissing('core/semantic/decisions.md.tpl', join(base, 'semantic', 'decisions.md'), vars);
+  writeTemplateIfMissing('core/procedural/common-workflows.md.tpl', join(base, 'procedural', 'common-workflows.md'), vars);
+  writeTemplateIfMissing('core/episodic/daily.md.tpl', join(base, 'episodic', `${today()}.md`), vars);
+  writeTemplateIfMissing('core/GITIGNORE.tpl', join(base, '.gitignore'), vars);
+}
+
+function ensureClaudeIntegration(target, vars, opts) {
+  const pluginDir = join(target, opts.pluginDir);
+  const claudeMdPath = join(target, opts.claudeMdPath);
+
+  const claudeBody = render(readTemplate('claude/CLAUDE.md.tpl'), vars);
+  injectManagedBlock(claudeMdPath, 'Claude Code project instructions', claudeBody);
+
+  writeManagedFile('claude/plugin/.claude-plugin/plugin.json.tpl', join(pluginDir, '.claude-plugin', 'plugin.json'), vars);
+  writeManagedFile('claude/plugin/hooks/hooks.json.tpl', join(pluginDir, 'hooks', 'hooks.json'), vars);
+  writeManagedFile('claude/plugin/skills/maintain-workmem/SKILL.md.tpl', join(pluginDir, 'skills', 'maintain-workmem', 'SKILL.md'), vars);
+  writeManagedFile('claude/plugin/mcp/server.js.tpl', join(pluginDir, 'mcp', 'server.js'), vars);
+  writeManagedFile('claude/plugin/mcp/mcp.json.tpl', join(pluginDir, 'mcp', 'mcp.json'), vars);
+  writeManagedFile('claude/plugin/scripts/session-start.js.tpl', join(pluginDir, 'scripts', 'session-start.js'), vars);
+  writeManagedFile('claude/plugin/scripts/user-prompt-submit.js.tpl', join(pluginDir, 'scripts', 'user-prompt-submit.js'), vars);
+  writeManagedFile('claude/plugin/scripts/lifecycle-memory-review.js.tpl', join(pluginDir, 'scripts', 'lifecycle-memory-review.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/common.js.tpl', join(pluginDir, 'scripts', 'memory', 'common.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/read.js.tpl', join(pluginDir, 'scripts', 'memory', 'read.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/write.js.tpl', join(pluginDir, 'scripts', 'memory', 'write.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/promote.js.tpl', join(pluginDir, 'scripts', 'memory', 'promote.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/reindex.js.tpl', join(pluginDir, 'scripts', 'memory', 'reindex.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/review.js.tpl', join(pluginDir, 'scripts', 'memory', 'review.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/sync.js.tpl', join(pluginDir, 'scripts', 'memory', 'sync.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/topic-create.js.tpl', join(pluginDir, 'scripts', 'memory', 'topic-create.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/archive.js.tpl', join(pluginDir, 'scripts', 'memory', 'archive.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/compact.js.tpl', join(pluginDir, 'scripts', 'memory', 'compact.js'), vars);
+}
+
+function printInitSummary(target, backend, opts) {
+  const pluginDir = join(target, opts.pluginDir);
+  console.log(`\nInitialized workmem for ${SUPPORTED_BACKENDS[backend].label}`);
+  console.log(`Memory root: ${join(target, '.agent', 'memory')}`);
+  console.log(`Claude plugin: ${pluginDir}`);
+  console.log(`\nMemory model:`);
+  console.log(`  - MEMORY.md = compact index and routing layer`);
+  console.log(`  - semantic/*.md = durable knowledge and decisions`);
+  console.log(`  - procedural/*.md = reusable workflows`);
+  console.log(`  - episodic/YYYY-MM-DD.md = dated session notes`);
+  console.log(`\nNext step:`);
+  console.log(`  claude --plugin-dir ${pluginDir}`);
+  console.log(`\nLocal memory scripts:`);
+  console.log(`  - node ${join(pluginDir, 'scripts', 'memory', 'read.js')} --help`);
+  console.log(`  - node ${join(pluginDir, 'scripts', 'memory', 'write.js')} --help`);
+  console.log(`  - node ${join(pluginDir, 'scripts', 'memory', 'promote.js')} --help`);
+  console.log(`  - node ${join(pluginDir, 'scripts', 'memory', 'reindex.js')} --help`);
+  console.log(`  - node ${join(pluginDir, 'scripts', 'memory', 'review.js')} --help`);
+  console.log(`  - node ${join(pluginDir, 'scripts', 'memory', 'sync.js')} --help`);
+  console.log(`  - node ${join(pluginDir, 'scripts', 'memory', 'topic-create.js')} --help`);
+  console.log(`  - node ${join(pluginDir, 'scripts', 'memory', 'archive.js')} --help`);
+  console.log(`  - node ${join(pluginDir, 'scripts', 'memory', 'compact.js')} --help`);
+  console.log(`\nMCP config:`);
+  console.log(`  - claude --mcp-config ${join(pluginDir, 'mcp', 'mcp.json')}`);
+}
+
+function doctorCore(target) {
+  const base = join(target, '.agent', 'memory');
+  const requiredFiles = [
+    'MEMORY.md',
+    'semantic/project.md',
+    'semantic/active-context.md',
+    'semantic/decisions.md',
+    'procedural/common-workflows.md',
+    '.gitignore',
   ];
+  const requiredDirs = ['episodic', 'semantic', 'procedural', 'snapshots', 'legacy'];
 
-  const selected = await checkbox({
-    message: 'Select agents to set up:',
-    choices,
-    required: true,
-  });
+  let ok = true;
 
-  const agents = [];
-  let customEntries = [];
-
-  for (const item of selected) {
-    if (item === '__custom__') {
-      const raw = await input({
-        message: 'Enter custom entry file path (e.g. .trae/memory.md):',
-        validate: (v) => v.trim() ? true : 'File path is required',
-      });
-      customEntries.push(raw.trim());
-    } else {
-      agents.push(item);
+  for (const rel of requiredDirs) {
+    const full = join(base, rel);
+    if (!existsSync(full) || !statSync(full).isDirectory()) {
+      ok = false;
+      console.log(`  missing dir: .agent/memory/${rel}`);
     }
   }
 
-  return { agents, customEntries };
-}
-
-function parseAgentFlag(raw) {
-  if (!raw) return null;
-  return String(raw).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-}
-
-// ── scaffold ──
-
-function ensureMemoryScaffold(target, vars) {
-  const base = join(target, '.agent', 'memory');
-  for (const dir of ['current', 'learnings', 'procedures', 'archive']) {
-    ensureDir(join(base, dir));
+  for (const rel of requiredFiles) {
+    if (!existsSync(join(base, rel))) {
+      ok = false;
+      console.log(`  missing: .agent/memory/${rel}`);
+    }
   }
-  writeTemplate(join(TEMPLATES, 'shared', 'START.md.tpl'), join(base, 'START.md'), vars);
-  writeTemplate(join(TEMPLATES, 'shared', 'CURRENT.md.tpl'), join(base, 'current', 'CURRENT.md'), vars);
-  writeTemplate(join(TEMPLATES, 'shared', 'TODOS.md.tpl'), join(base, 'current', 'TODOS.md'), vars);
-  writeTemplate(join(TEMPLATES, 'shared', 'LEARNINGS.md.tpl'), join(base, 'learnings', 'LEARNINGS.md'), vars);
-  writeTemplate(join(TEMPLATES, 'shared', 'PROCEDURES.md.tpl'), join(base, 'procedures', 'PROCEDURES.md'), vars);
 
-  const gitignorePath = join(base, '.gitignore');
-  if (!existsSync(gitignorePath)) {
-    writeFileSync(gitignorePath, `# Personal working state — do not commit\ncurrent/\narchive/\n`, 'utf8');
+  const latest = latestEpisodicFile(base);
+  if (!latest) {
+    ok = false;
+    console.log('  missing: .agent/memory/episodic/*.md');
   }
+
+  return ok;
 }
 
-function ensureAgentsEntry(target, allLabels, vars) {
-  const agentsFile = join(target, 'AGENTS.md');
-  const tpl = join(TEMPLATES, 'shared', 'AGENTS.md.tpl');
-  const tplContent = render(readFileSync(tpl, 'utf8'), vars);
-  const injection = `\n${WORKMEM_MARKER}\n${tplContent.trim()}\n`;
+function doctorClaude(target, opts) {
+  const required = [
+    join(opts.claudeMdPath),
+    join(opts.pluginDir, '.claude-plugin', 'plugin.json'),
+    join(opts.pluginDir, 'hooks', 'hooks.json'),
+    join(opts.pluginDir, 'skills', 'maintain-workmem', 'SKILL.md'),
+    join(opts.pluginDir, 'mcp', 'server.js'),
+    join(opts.pluginDir, 'mcp', 'mcp.json'),
+    join(opts.pluginDir, 'scripts', 'session-start.js'),
+    join(opts.pluginDir, 'scripts', 'user-prompt-submit.js'),
+    join(opts.pluginDir, 'scripts', 'lifecycle-memory-review.js'),
+    join(opts.pluginDir, 'scripts', 'memory', 'common.js'),
+    join(opts.pluginDir, 'scripts', 'memory', 'read.js'),
+    join(opts.pluginDir, 'scripts', 'memory', 'write.js'),
+    join(opts.pluginDir, 'scripts', 'memory', 'promote.js'),
+    join(opts.pluginDir, 'scripts', 'memory', 'reindex.js'),
+  ];
 
-  const result = injectMarkerBlock(agentsFile, 'AGENTS', injection);
-  if (result === 'created') {
-    writeFileSync(agentsFile, tplContent, 'utf8');
-    console.log(`  created AGENTS.md`);
-  } else if (result === 'updated') {
-    console.log(`  updated AGENTS.md`);
-  } else {
-    console.log(`  AGENTS.md already has workmem reference`);
+  let ok = true;
+  for (const rel of required) {
+    if (!existsSync(join(target, rel))) {
+      ok = false;
+      console.log(`  missing: ${rel}`);
+    }
   }
+
+  const claudeMdPath = join(target, opts.claudeMdPath);
+  if (existsSync(claudeMdPath)) {
+    const content = readFileSync(claudeMdPath, 'utf8');
+    if (!content.includes(WORKMEM_MARKER)) {
+      ok = false;
+      console.log(`  ${opts.claudeMdPath}: exists but has no workmem-managed block`);
+    }
+  }
+
+  return ok;
 }
 
-function injectAgentEntry(target, agentName) {
-  const info = KNOWN_AGENTS[agentName];
-  if (!info) { console.log(`  skip unknown agent: ${agentName}`); return; }
-
-  const entryPath = join(target, info.entryFile);
-  const injection = `\n${WORKMEM_MARKER}\n## Project Memory (workmem)\n\nThis project uses a shared working memory layer. Read \`AGENTS.md\` before starting work.\n`;
-
-  const result = injectMarkerBlock(entryPath, info.label, injection);
-  if (result === 'created') console.log(`  created ${info.entryFile}`);
-  else if (result === 'updated') console.log(`  updated ${info.entryFile}`);
-  else console.log(`  ${info.entryFile} already has workmem reference`);
+function parseBackend(raw) {
+  const backend = String(raw || 'claude').trim().toLowerCase();
+  if (!SUPPORTED_BACKENDS[backend]) {
+    throw new Error(`Unsupported backend: ${backend}. Currently supported: ${Object.keys(SUPPORTED_BACKENDS).join(', ')}`);
+  }
+  return backend;
 }
-
-function injectCustomEntry(target, entryFile) {
-  const entryPath = join(target, entryFile);
-  const label = basename(entryFile, '.md');
-  const injection = `\n${WORKMEM_MARKER}\n## Project Memory (workmem)\n\nThis project uses a shared working memory layer. Read \`AGENTS.md\` before starting work.\n`;
-
-  const result = injectMarkerBlock(entryPath, label, injection);
-  if (result === 'created') console.log(`  created ${entryFile}`);
-  else if (result === 'updated') console.log(`  updated ${entryFile}`);
-  else console.log(`  ${entryFile} already has workmem reference`);
-}
-
-function printSummary(target) {
-  console.log(`\nShared files (commit to git):`);
-  console.log(`  .agent/memory/START.md`);
-  console.log(`  .agent/memory/learnings/`);
-  console.log(`  .agent/memory/procedures/`);
-  console.log(`  AGENTS.md`);
-  console.log(`\nPersonal files (gitignored):`);
-  console.log(`  .agent/memory/current/`);
-  console.log(`  .agent/memory/archive/`);
-}
-
-// ── commands ──
 
 const program = new Command();
-
 program
   .name('workmem')
-  .description('Shared project memory scaffolding for coding agents.')
-  .version('1.0.0');
+  .description('Project memory scaffolding with a Claude Code plugin backend.')
+  .version(PKG.version);
 
 program
   .command('init')
-  .description('Initialize workmem scaffold in a project')
+  .description('Initialize the semantic/procedural/episodic memory scaffold plus Claude Code plugin integration')
   .argument('[target-dir]', 'target directory', '.')
-  .option('--agents <list>', 'comma-separated agent names')
-  .option('--custom <path>', 'custom entry file path (e.g. .trae/memory.md)')
-  .action(async (targetDir, opts) => {
+  .option('--backend <name>', 'integration backend (currently only: claude)', 'claude')
+  .option('--plugin-dir <path>', 'relative Claude plugin directory', SUPPORTED_BACKENDS.claude.pluginDir)
+  .option('--claude-md <path>', 'relative Claude Code project instructions file', SUPPORTED_BACKENDS.claude.claudeMd)
+  .action((targetDir, opts) => {
     const target = resolve(targetDir);
-    let agents = [], customEntries = [];
+    const backend = parseBackend(opts.backend);
+    const vars = {
+      PROJECT_NAME: projectName(target),
+      BACKEND_LABEL: SUPPORTED_BACKENDS[backend].label,
+      PLUGIN_DIR: opts.pluginDir,
+      CLAUDE_MD_PATH: opts.claudeMd,
+      VERSION: PKG.version,
+      TODAY: today(),
+    };
 
-    if (opts.custom) {
-      customEntries.push(opts.custom.trim());
+    ensureCoreMemoryScaffold(target, vars);
+    if (backend === 'claude') {
+      ensureClaudeIntegration(target, vars, { pluginDir: opts.pluginDir, claudeMdPath: opts.claudeMd });
     }
 
-    if (opts.agents) {
-      agents = parseAgentFlag(opts.agents);
-    } else if (!opts.custom) {
-      const result = await selectAgents();
-      agents = result.agents;
-      customEntries.push(...result.customEntries);
-    }
-
-    const allLabels = [
-      ...agents.map((a) => KNOWN_AGENTS[a]?.label || a),
-      ...customEntries.map((e) => basename(e, '.md')),
-    ];
-    const vars = { PROJECT_NAME: projectName(target), AGENT_LIST: allLabels.join(', ') };
-
-    ensureMemoryScaffold(target, vars);
-    ensureAgentsEntry(target, allLabels, vars);
-    for (const agent of agents) injectAgentEntry(target, agent);
-    for (const entry of customEntries) injectCustomEntry(target, entry);
-
-    console.log(`\nInitialized workmem in ${join(target, '.agent', 'memory')}`);
-    console.log(`Agents: ${allLabels.join(', ')}`);
-    printSummary(target);
-  });
-
-program
-  .command('add-agent')
-  .description('Add agent entry files to an existing scaffold')
-  .argument('[target-dir]', 'target directory', '.')
-  .option('--agents <list>', 'comma-separated agent names')
-  .option('--custom <path>', 'custom entry file path (e.g. .trae/memory.md)')
-  .action(async (targetDir, opts) => {
-    const target = resolve(targetDir);
-    let agents = [], customEntries = [];
-
-    if (opts.custom) {
-      customEntries.push(opts.custom.trim());
-    }
-
-    if (opts.agents) {
-      agents = parseAgentFlag(opts.agents);
-    } else if (!opts.custom) {
-      const result = await selectAgents();
-      agents = result.agents;
-      customEntries.push(...result.customEntries);
-    }
-
-    for (const agent of agents) injectAgentEntry(target, agent);
-    for (const entry of customEntries) injectCustomEntry(target, entry);
-
-    const labels = [
-      ...agents.map((a) => KNOWN_AGENTS[a]?.label || a),
-      ...customEntries.map((e) => basename(e, '.md')),
-    ];
-    console.log(`Added agents: ${labels.join(', ')}`);
+    printInitSummary(target, backend, { pluginDir: opts.pluginDir });
   });
 
 program
   .command('snapshot')
-  .description('Archive current memory state')
+  .description('Archive the current workmem state into snapshots/')
   .argument('[target-dir]', 'target directory', '.')
   .option('--name <label>', 'snapshot label')
   .action((targetDir, opts) => {
     const target = resolve(targetDir);
     const base = join(target, '.agent', 'memory');
-    const archive = join(base, 'archive');
-    ensureDir(archive);
+    const snapshots = join(base, 'snapshots');
+    ensureDir(snapshots);
     const name = opts.name || new Date().toISOString().replace(/[:.]/g, '-');
-    const snapDir = join(archive, name);
+    const snapDir = join(snapshots, name);
     ensureDir(snapDir);
-    for (const rel of ['START.md', 'current', 'learnings', 'procedures']) {
+
+    for (const rel of ['MEMORY.md', 'episodic', 'semantic', 'procedural']) {
       const src = join(base, rel);
       if (existsSync(src)) cpSync(src, join(snapDir, rel), { recursive: true });
     }
+
     console.log(`Snapshot saved: ${snapDir}`);
   });
 
 program
   .command('doctor')
-  .description('Check scaffold health')
+  .description('Check memory scaffold and Claude Code integration health')
   .argument('[target-dir]', 'target directory', '.')
-  .action((targetDir) => {
+  .option('--backend <name>', 'integration backend (currently only: claude)', 'claude')
+  .option('--plugin-dir <path>', 'relative Claude plugin directory', SUPPORTED_BACKENDS.claude.pluginDir)
+  .option('--claude-md <path>', 'relative Claude Code project instructions file', SUPPORTED_BACKENDS.claude.claudeMd)
+  .action((targetDir, opts) => {
     const target = resolve(targetDir);
-    const base = join(target, '.agent', 'memory');
-    const required = [
-      'START.md',
-      'current/CURRENT.md',
-      'current/TODOS.md',
-      'learnings/LEARNINGS.md',
-      'procedures/PROCEDURES.md',
-    ];
-    let ok = true;
-    for (const rel of required) {
-      const full = join(base, rel);
-      if (!existsSync(full)) {
-        ok = false;
-        console.log(`  missing: .agent/memory/${rel}`);
-      }
+    const backend = parseBackend(opts.backend);
+
+    let ok = doctorCore(target);
+    if (backend === 'claude') {
+      ok = doctorClaude(target, { pluginDir: opts.pluginDir, claudeMdPath: opts.claudeMd }) && ok;
     }
-    // Check agent entry files
-    for (const [name, info] of Object.entries(KNOWN_AGENTS)) {
-      const entryPath = join(target, info.entryFile);
-      if (existsSync(entryPath)) {
-        const content = readFileSync(entryPath, 'utf8');
-        if (content.includes(WORKMEM_MARKER)) {
-          console.log(`  ${info.entryFile}: workmem linked`);
-        } else {
-          console.log(`  ${info.entryFile}: exists but no workmem reference`);
-        }
-      }
-    }
+
     console.log(ok ? 'doctor: OK' : 'doctor: issues found');
     process.exitCode = ok ? 0 : 1;
   });
