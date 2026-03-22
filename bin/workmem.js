@@ -116,6 +116,8 @@ function ensureClaudeIntegration(target, vars, opts) {
   writeManagedFile('claude/plugin/scripts/user-prompt-submit.js.tpl', join(pluginDir, 'scripts', 'user-prompt-submit.js'), vars);
   writeManagedFile('claude/plugin/scripts/lifecycle-memory-review.js.tpl', join(pluginDir, 'scripts', 'lifecycle-memory-review.js'), vars);
   writeManagedFile('claude/plugin/scripts/memory/common.js.tpl', join(pluginDir, 'scripts', 'memory', 'common.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/extractor.js.tpl', join(pluginDir, 'scripts', 'memory', 'extractor.js'), vars);
+  writeManagedFile('claude/plugin/scripts/memory/schema.js.tpl', join(pluginDir, 'scripts', 'memory', 'schema.js'), vars);
   writeManagedFile('claude/plugin/scripts/memory/read.js.tpl', join(pluginDir, 'scripts', 'memory', 'read.js'), vars);
   writeManagedFile('claude/plugin/scripts/memory/write.js.tpl', join(pluginDir, 'scripts', 'memory', 'write.js'), vars);
   writeManagedFile('claude/plugin/scripts/memory/promote.js.tpl', join(pluginDir, 'scripts', 'memory', 'promote.js'), vars);

@@ -215,10 +215,7 @@ They are intentionally simple:
 - `promote.js` moves durable notes from episodic flow into semantic/procedural topics
 - `reindex.js` refreshes `MEMORY.md` from the current topic tree
 - `review.js` extracts candidate promotions from the latest episodic note
-- `sync.js` does a heuristic pass to push follow-ups / decisions / workflows into the right buckets
-- `topic-create.js` creates a new topic file when a subject outgrows the existing pages
-- `archive.js` moves stale topics into `legacy/`
-- `compact.js` trims noisy active files so the memory set stays usable
+- `sync.js` starts with deterministic heuristics, and can optionally upgrade the result with an LLM extractor when `WORKMEM_LLM_URL`, `WORKMEM_LLM_API_KEY`, and `WORKMEM_LLM_MODEL` are set
 - `topic-create.js` creates a new topic file when a subject outgrows the existing pages
 - `archive.js` moves stale topics into `legacy/`
 - `compact.js` trims noisy active files so the memory set stays usable

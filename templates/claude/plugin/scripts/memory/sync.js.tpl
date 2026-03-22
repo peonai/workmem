@@ -2,6 +2,8 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { latestEpisodicPath, memoryRoot, parseArgs, readText, writeText } from './common.js';
+import { extractStructuredMemory } from './extractor.js';
+import { normalizeExtractedMemory } from './schema.js';
 
 function collectBullets(sectionText) {
   return sectionText
@@ -22,9 +24,7 @@ function replaceSection(text, heading, bodyLines) {
   const body = bodyLines.join('\n');
   const block = `## ${heading}\n${body}`;
   const pattern = new RegExp(`## ${heading}\\n[\\s\\S]*?(?=\\n## |$)`);
-  if (pattern.test(text)) {
-    return text.replace(pattern, `${block}\n`);
-  }
+  if (pattern.test(text)) return text.replace(pattern, `${block}\n`);
   return `${text.trimEnd()}\n\n${block}\n`;
 }
 
@@ -58,7 +58,7 @@ function detectAppKind(cwd, entryPoint) {
   return 'CLI app';
 }
 
-function repoFacts(cwd) {
+function heuristicFacts(cwd) {
   const pkg = parsePackageJson(cwd);
   const readme = parseReadme(cwd);
   const entryPoint = detectEntryPoint(cwd, pkg);
@@ -79,17 +79,17 @@ function repoFacts(cwd) {
     users: 'Developers working in this repo',
     stack: stackParts.join(', '),
     runtime: entryPoint ? `${appKind} (${entryPoint})` : appKind,
-    deps: deps.length ? deps.join(', ') : 'none',
+    dependencies: deps,
     constraints: pkg.private === true ? ['Private package (not published to npm)'] : [],
     references: ['README.md', 'package.json', entryPoint].filter(Boolean),
     entryPoint,
   };
 }
 
-function deriveActiveContext(workLog, followUps, facts) {
+function heuristicActiveContext(workLog, followUps, facts) {
   const latestWork = workLog[workLog.length - 1] || '';
   const nextStep = followUps[0] || (facts.entryPoint ? `Expand functionality in ${facts.entryPoint}` : 'Define the next meaningful feature');
-  const risks = facts.deps === 'none' ? 'None currently' : 'Keep dependency sprawl under control';
+  const risks = facts.dependencies.length === 0 ? 'None currently' : 'Keep dependency sprawl under control';
   const openThreads = [];
   if (facts.entryPoint) openThreads.push(`Main entry point is ${facts.entryPoint}`);
   if (followUps.length > 1) openThreads.push(...followUps.slice(1));
@@ -103,12 +103,17 @@ function deriveActiveContext(workLog, followUps, facts) {
   };
 }
 
+function mergeUnique(existing, incoming) {
+  const merged = [...existing];
+  for (const item of incoming) {
+    if (item && !merged.includes(item)) merged.push(item);
+  }
+  return merged;
+}
+
 function mergeDecisionEntries(existingText, newItems) {
   const existingEntries = collectBullets(getSection(existingText, 'Entries'));
-  const merged = [...existingEntries];
-  for (const item of newItems) {
-    if (!merged.includes(item)) merged.push(item);
-  }
+  const merged = mergeUnique(existingEntries, newItems);
   return replaceSection(existingText, 'Entries', merged.length ? merged.map((item) => `- ${item}`) : ['-']);
 }
 
@@ -117,13 +122,14 @@ function mergeProcedureSections(existingText, newItems) {
   let nextText = existingText;
   for (const section of sections) {
     const current = collectBullets(getSection(nextText, section));
-    const merged = [...current];
-    for (const item of newItems) {
-      if (!merged.includes(item)) merged.push(item);
-    }
+    const merged = mergeUnique(current, newItems);
     nextText = replaceSection(nextText, section, merged.length ? merged.map((item) => `- ${item}`) : ['-']);
   }
   return nextText;
+}
+
+function chooseValue(primary, fallback) {
+  return primary && primary.length ? primary : fallback;
 }
 
 export async function runCli({ cwd = process.cwd(), silent = false } = {}) {
@@ -139,38 +145,71 @@ export async function runCli({ cwd = process.cwd(), silent = false } = {}) {
   const proceduralPath = join(base, 'procedural', 'common-workflows.md');
   const projectPath = join(base, 'semantic', 'project.md');
 
-  const facts = repoFacts(cwd);
-  const activeContext = deriveActiveContext(workLog, followUps, facts);
+  const fallbackFacts = heuristicFacts(cwd);
+  const fallbackActive = heuristicActiveContext(workLog, followUps, fallbackFacts);
+
+  let extracted = null;
+  let extractionMode = 'heuristic';
+  try {
+    const raw = await extractStructuredMemory({ cwd, episodicPath, entryPoint: fallbackFacts.entryPoint });
+    if (raw) {
+      extracted = normalizeExtractedMemory(raw);
+      extractionMode = 'llm';
+    }
+  } catch {
+    extractionMode = 'heuristic';
+  }
+
+  const mergedProject = {
+    name: fallbackFacts.name,
+    purpose: chooseValue(extracted?.project?.purpose, fallbackFacts.purpose),
+    users: chooseValue(extracted?.project?.users, fallbackFacts.users),
+    stack: chooseValue(extracted?.project?.stack, fallbackFacts.stack),
+    runtime: chooseValue(extracted?.project?.runtime, fallbackFacts.runtime),
+    dependencies: extracted?.project?.dependencies?.length ? extracted.project.dependencies : fallbackFacts.dependencies,
+    constraints: extracted?.project?.constraints?.length ? extracted.project.constraints : fallbackFacts.constraints,
+    references: extracted?.project?.references?.length ? extracted.project.references : fallbackFacts.references,
+  };
+
+  const mergedActive = {
+    now: chooseValue(extracted?.activeContext?.now, fallbackActive.now),
+    next: chooseValue(extracted?.activeContext?.next, fallbackActive.next),
+    risks: chooseValue(extracted?.activeContext?.risks, fallbackActive.risks),
+    openThreads: extracted?.activeContext?.openThreads?.length ? extracted.activeContext.openThreads : fallbackActive.openThreads,
+    shortReminders: extracted?.activeContext?.shortReminders?.length ? extracted.activeContext.shortReminders : fallbackActive.shortReminders,
+  };
 
   let project = readText(projectPath) || '# Project\n';
   project = replaceSection(project, 'What this project is', [
-    `- Name: ${facts.name}`,
-    `- Purpose: ${facts.purpose}`,
-    `- Primary users: ${facts.users}`,
+    `- Name: ${mergedProject.name}`,
+    `- Purpose: ${mergedProject.purpose}`,
+    `- Primary users: ${mergedProject.users}`,
   ]);
   project = replaceSection(project, 'Durable facts', [
-    `- Main stack: ${facts.stack}`,
-    `- Deployment/runtime: ${facts.runtime}`,
-    `- Key external dependencies: ${facts.deps}`,
+    `- Main stack: ${mergedProject.stack}`,
+    `- Deployment/runtime: ${mergedProject.runtime}`,
+    `- Key external dependencies: ${mergedProject.dependencies.length ? mergedProject.dependencies.join(', ') : 'none'}`,
   ]);
-  project = replaceSection(project, 'Important constraints', facts.constraints.length ? facts.constraints.map((item) => `- ${item}`) : ['-']);
-  project = replaceSection(project, 'References', facts.references.length ? facts.references.map((item) => `- ${item}`) : ['-']);
+  project = replaceSection(project, 'Important constraints', mergedProject.constraints.length ? mergedProject.constraints.map((item) => `- ${item}`) : ['-']);
+  project = replaceSection(project, 'References', mergedProject.references.length ? mergedProject.references.map((item) => `- ${item}`) : ['-']);
 
   let active = readText(activePath) || '# Active Context\n';
   active = replaceSection(active, 'Current focus', [
-    `- Now: ${activeContext.now}`,
-    `- Next: ${activeContext.next}`,
-    `- Risks: ${activeContext.risks}`,
+    `- Now: ${mergedActive.now}`,
+    `- Next: ${mergedActive.next}`,
+    `- Risks: ${mergedActive.risks}`,
   ]);
-  active = replaceSection(active, 'Open threads', activeContext.openThreads.length ? activeContext.openThreads.map((item) => `- ${item}`) : ['-']);
-  active = replaceSection(active, 'Short-term reminders', activeContext.shortReminders.length ? activeContext.shortReminders.map((item) => `- ${item}`) : ['-']);
+  active = replaceSection(active, 'Open threads', mergedActive.openThreads.length ? mergedActive.openThreads.map((item) => `- ${item}`) : ['-']);
+  active = replaceSection(active, 'Short-term reminders', mergedActive.shortReminders.length ? mergedActive.shortReminders.map((item) => `- ${item}`) : ['-']);
 
   let decisions = readText(decisionsPath) || '# Decisions\n\n## Entries\n-\n';
-  const decisionItems = findings.filter((item) => /(constraint|decision|fact|architecture|ready|exists|uses|depends|requires|risk|约定|限制|决策|架构|事实|依赖|需要)/i.test(item));
+  const heuristicDecisionItems = findings.filter((item) => /(constraint|decision|fact|architecture|ready|exists|uses|depends|requires|risk|约定|限制|决策|架构|事实|依赖|需要)/i.test(item));
+  const decisionItems = mergeUnique(heuristicDecisionItems, extracted?.decisions || []);
   decisions = mergeDecisionEntries(decisions, decisionItems);
 
   let procedural = readText(proceduralPath) || '# Common Workflows\n';
-  const workflowItems = [...workLog, ...findings].filter((item) => /(workflow|steps|command|build|release|test|deploy|setup|debug|script|流程|命令|构建|发布|测试|部署|调试)/i.test(item));
+  const heuristicWorkflowItems = [...workLog, ...findings].filter((item) => /(workflow|steps|command|build|release|test|deploy|setup|debug|script|流程|命令|构建|发布|测试|部署|调试)/i.test(item));
+  const workflowItems = mergeUnique(heuristicWorkflowItems, extracted?.procedures || []);
   procedural = mergeProcedureSections(procedural, workflowItems);
 
   writeText(projectPath, project);
@@ -178,7 +217,7 @@ export async function runCli({ cwd = process.cwd(), silent = false } = {}) {
   writeText(decisionsPath, decisions);
   writeText(proceduralPath, procedural);
 
-  const stdout = JSON.stringify({ activePath, decisionsPath, proceduralPath, projectPath, episodicPath }, null, 2);
+  const stdout = JSON.stringify({ activePath, decisionsPath, proceduralPath, projectPath, episodicPath, extractionMode }, null, 2);
   if (!silent) console.log(stdout);
   return { stdout: `${stdout}\n` };
 }
