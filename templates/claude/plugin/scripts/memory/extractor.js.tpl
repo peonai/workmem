@@ -102,7 +102,18 @@ export async function extractStructuredMemory({ cwd, episodicPath, entryPoint })
   }
 
   const payload = await response.json();
-  const text = payload.output_text || payload.output?.[0]?.content?.[0]?.text || payload.choices?.[0]?.message?.content || '';
+  
+  // Support multiple response formats:
+  // - OpenAI Responses API: payload.output_text or payload.output[0].content[0].text
+  // - OpenAI Chat Completions: payload.choices[0].message.content
+  // - Anthropic Messages: payload.content[0].text
+  const text = 
+    payload.output_text || 
+    payload.output?.[0]?.content?.[0]?.text || 
+    payload.choices?.[0]?.message?.content || 
+    payload.content?.[0]?.text || 
+    '';
+  
   const parsed = safeJsonParse(typeof text === 'string' ? text.trim() : '');
   if (!parsed) throw new Error('extractor returned non-JSON output');
   return parsed;

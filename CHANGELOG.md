@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.7.0
+
+- add LLM-assisted extraction to `sync.js` with optional upgrade path via `WORKMEM_LLM_*` env vars
+- add `extractor.js`: structured memory extraction from episodic notes, package.json, README, and entry source
+- add `schema.js`: normalize extracted memory payloads
+- update `sync.js`: hybrid mode (heuristic fallback + optional LLM merge)
+- support multiple LLM response formats: OpenAI Chat/Responses, Anthropic Messages
+- add minimal regression test for sync workflow
+- fix: include `extractor.js` and `schema.js` in `workmem init` output
+
 ## 2.6.0
 
 - strengthen Claude-facing instructions so workmem MCP tools become the default memory path instead of a nice-to-have
