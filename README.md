@@ -46,8 +46,8 @@ your-project/
 │       │   └── common-workflows.md
 │       ├── snapshots/
 │       └── legacy/
+├── CLAUDE.md
 └── .claude/
-    ├── CLAUDE.md
     └── plugins/
         └── workmem/
             ├── .claude-plugin/
@@ -158,7 +158,7 @@ workmem snapshot --name pre-refactor
 Create the memory scaffold plus Claude Code plugin integration.
 
 ```bash
-workmem init [target-dir] [--backend claude] [--plugin-dir .claude/plugins/workmem] [--claude-md .claude/CLAUDE.md]
+workmem init [target-dir] [--backend claude] [--plugin-dir .claude/plugins/workmem] [--claude-md CLAUDE.md]
 ```
 
 ### `workmem doctor`

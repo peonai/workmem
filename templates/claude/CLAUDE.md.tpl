@@ -1,4 +1,4 @@
-## workmem
+## Project Memory
 
 This project uses `workmem` as the repo-local memory system.
 

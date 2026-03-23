@@ -13,7 +13,7 @@ const SUPPORTED_BACKENDS = {
   claude: {
     label: 'Claude Code',
     pluginDir: '.claude/plugins/workmem',
-    claudeMd: '.claude/CLAUDE.md',
+    claudeMd: 'CLAUDE.md',
   },
 };
 
